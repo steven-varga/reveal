@@ -1,0 +1,573 @@
+<!-- vargaconsulting.ca -->
+<section>
+	<h1>H5CPP</h1>
+	<h5>the first non-intrusive persistence with MPI-IO and KITA&trade;</h5> <h1>for modern C++</h4>
+	<p><small>Created by <a href="http://h5cpp.ca">Steven Varga</a> 
+		in co-operation with <a href="https://github.com/gheber">Gerd Heber</a>, HDFGroup</small></p>
+	<p><small><a href="http://presentation.h5cpp.org">Online version of this presentation:</a> http://presentation.h5cpp.org</small></p> 
+</section>
+
+<section data-markdown data-transition="zoom"  data-separator-notes="^Note:"  style="text-align: left;"><textarea data-template>
+### FEATURES
+- Tuned High performance MPI and Serial HDF5 I, as S3 through KITA&trade;
+- Support for Popular Linear Algebra libraries and the STL
+- CRUD-like operators
+		`h5::create | h5::write | h5::read | h5::append`
+- RAII - constructor acquires, destructor releases
+- C-API `hid_t` handle conversion policy: seamless | explicit | none
+- Error handling via structured exceptions
+- A "real" high performance  packet table (arbitrary types)
+   - High throughput I/O pipeline (experimental)
+   - multithreaded compression possible
+- LLVM based Compiler assisted reflection 
+</textarea></section>
+
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## H5CPP Compiler: what does it do?
+- LLVM7.0.0 based parser generates the AST of the TU Translation Unit
+- objects marked/painted with the operators are identified,
+- topological reordering of dependency graph
+- elimination
+- code generation: HDF5 Data Description Language
+- include the generated header file into your TU translation unit
+- second stage: invoke your favourite compiler: intel, gcc, cray, ibm, pg,  ...
+</textarea></section>
+
+<section  style="text-align: left;" >
+	<h2>take a header file with POD struct</h2>
+	<pre><code>
+typedef unsigned long long int MyUInt;
+namespace sn {
+	namespace example {
+		struct Record {                   
+			MyUInt               field_01; 
+			char                 field_02;
+			double            field_03[3]; 
+			other::Record field_04[4];
+		};
+	}
+}
+</pre></code>
+<ul>
+  <li class="fragment" data-code-focus="2,6"> 
+  typedefs are fine</li>
+  <li class="fragment" data-code-focus="3-4,10-11"> 
+  nested namespace are OK</li>
+  <li class="fragment" data-code-focus="7">
+  mapped to : <a href="https://support.hdfgroup.org/HDF5/doc1.6/UG/11_Datatypes.html" >H5T_NATIVE_CHAR</a> </li>
+  <li class="fragment" data-code-focus="8">
+  H5Tarray_create(H5T_NATIVE_DOUBLE,1, ... ) </li>
+  <li class="fragment" data-code-focus="9">
+  first `other::Record` is parsed: type_hid_t = ... </li>
+  <li class="fragment" data-code-focus="9">
+  then the generated type is used: H5Tarray_create(type_hid_t, ...)  </li>
+</ul>
+</section>
+
+<section  style="text-align: left;" >
+	<h3>write your program</h3>
+<pre><p1>write your cpp program as if `generated.h` were already written </p1>
+<code>#include "some_header_file.h"
+#include &lt;h5cpp/core&gt;
+	#include "generated.h"
+#include &lt;h5cpp/io&gt;
+int main(){
+	std::vector&lt;sn::example::Record&gt; stream =
+		...
+	h5::fd_t fd = h5::create("example.h5",H5F_ACC_TRUNC);
+	h5::pt_t pt = h5::create&lt;sn::example::Record&gt;(
+		fd, "stream of struct",
+		h5::max_dims{H5S_UNLIMITED,7}, h5::chunk{4,7} | h5::gzip{9} );
+	...
+}
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="2,4">sandwich the not-yet existing `generated.h` </li>
+  <li class="fragment" data-code-focus="5,13">write the TU translation unit as usual</li>
+  <li class="fragment" data-code-focus="9">
+	  using the POD type with one of the  H5CPP CRUD like operators 
+	  <code>h5::create | h5::write | h5::read | h5::append</code>
+  will trigger the `h5cpp` compiler to generate code
+</ul>
+</section>
+
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+### Invoke ```h5cpp``` compiler on TU translation unit:
+```sh
+h5cpp  packettable.cpp -- $(CXXFLAGS) -I/usr/include/h5cpp-llvm -Dgenerated.h
+```
+POD structures referenced with:
+
+```cpp
+h5::create | h5::write | h5::read | h5::append
+```
+operators are processed in topological order, and the output is...
+</textarea></section>
+
+<section  style="text-align: left;" >
+<h3>A header file with HDF5 Compound Type descriptors:</h3>
+<pre><code>#ifndef H5CPP_GUARD_ErRrk
+#define H5CPP_GUARD_ErRrk
+namespace h5{
+    template<> hid_t inline register_struct<sn::example::Record>(){
+        hsize_t at_00_[] ={7};            hid_t at_00 = H5Tarray_create(H5T_NATIVE_FLOAT,1,at_00_);
+        hsize_t at_01_[] ={3};            hid_t at_01 = H5Tarray_create(H5T_NATIVE_DOUBLE,1,at_01_);
+        hid_t ct_00 = H5Tcreate(H5T_COMPOUND, sizeof (sn::typecheck::Record));
+        H5Tinsert(ct_00, "_char",	HOFFSET(sn::typecheck::Record,_char),H5T_NATIVE_CHAR);
+		...
+		H5Tclose(at_03); H5Tclose(at_04); H5Tclose(at_05); 
+        return ct_02;
+    };
+}
+H5CPP_REGISTER_STRUCT(sn::example::Record);
+#endif
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1-2,15">random include guards</li>
+  <li class="fragment" data-code-focus="3,13">within namespace </li>
+  <li class="fragment" data-code-focus="4,12">template specialization for h5::operators</li>
+  <li class="fragment" data-code-focus="7-8">compound types are recursively created</li>
+  <li class="fragment" data-code-focus="14">calls the template specialization when h5::operator needs it</li>
+</ul>
+</section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+### Invoke your favourite CPP compiler on TU translation unit
+
+```sh
+g++  -o packettable.o  $(CXXFLAGS) -c packettable.cpp
+```
+### link against serial or parallel HDF5
+```sh
+g++ packet_table.o -lhdf5 -lz -ldl -lm -o packet_table
+```
+### Done!
+</textarea></section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Basics
+- RAII idiom for descriptors 
+
+```cpp
+h5::fd_t fd = h5::create("example.h5",H5F_ACC_TRUNC);
+```
+- H5CPP wrap of `hid_t` remains binary compatible with CAPI `hid_t`
+
+- Templates accept type-safe configuration arguments in any order, and most CAPI 
+features are implemented
+
+```
+h5::write(fd, "path/to/object",  vec,
+	  h5::current_dims{100},  h5::max_dims{H5S_UNLIMITED},
+	  h5::offset{3}, h5::block{2}, h5::stride{2},
+	  h5::chunk{20} | h5::gzip{9} );
+```
+</textarea></section>
+
+<section  style="text-align: left;" >
+	<h3>CAPI <code>hid_t</code> Conversion Policy </h3>
+allows to tighten control how HDF5 CAPI and H5CPP calls can interact. In the default case seamless conversion permits 
+to use handles from the two API-s interchangeably.
+<pre><code>#define H5CPP_CONVERSION_IMPLICIT
+#define H5CPP_CONVERSION_EXPLICIT
+#define H5CPP_CONVERSION_FROM_CAPI_DISABLED
+#define H5CPP_CONVERSION_TO_CAPI_DISABLED
+h5::fd_t fd = h5::open( ... );
+H5capi_call( static_cast<hid_t>(fd), ... );
+
+hid_t capi_fd = H5Fopen( ... );
+h5::read(fd, "dataset", ...));
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1,8-9">seamless conversion between H5CPP and CAPI is allowed, this is default behaviour</li>
+  <li class="fragment" data-code-focus="2,6">passing from/to CAPI possible with `static_cast` only </li>
+  <li class="fragment" data-code-focus="3,9">compile time error, h5::operators will not take capi hid_t</li>
+  <li class="fragment" data-code-focus="4,6">compile time error no conversion from h5::hid_t&lt;T&gt; to capi hid_t </li>
+  </li>
+</ul>
+</section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## STRUCTURED EXCEPTIONS
+- Hierarchy rooted in h5::error::any
+- C-API error stack can be dumped, unrolled, (un-)muted
+- Supports capture to thread-local storage
+
+```cpp
+ 1: // capture errors centrally with the granularity you desire
+ 2: try {
+ 3:     my_deeply_embedded_io_calls();
+ 4: } catch ( const h5::error::io::dataset::create& e ){
+ 5:     // handle file creation error
+ 6: } catch ( const h5::error::io::dataset::write& e ){
+ 7: } catch ( const h5::error::io::file::create& e ){
+ 8: } catch ( const h5::error::io::file::close& e ){
+ 9: } catch ( const h5::any& e ) {
+10:     std::cerr << e.what() << std::endl;
+11: }
+```
+</textarea></section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template >
+### Supported objects in BNF: 
+```yacc
+T := ([unsigned] ( int8_t | int16_t | int32_t | int64_t )) | ( float | double  )
+S := T | c/c++ struct | std::string
+ref := std::vector&lt;S&gt; 
+    | arma::Row&lt;T&gt; | arma::Col&lt;T&gt; | arma::Mat&lt;T&gt; | arma::Cube&lt;T&gt; 
+    | Eigen::Matrix&lt;T,Dynamic,Dynamic&gt; | Eigen::Matrix&lt;T,Dynamic,1&gt; | Eigen::Matrix&lt;T,1,Dynamic&gt;
+    | Eigen::Array&lt;T,Dynamic,Dynamic&gt;  | Eigen::Array&lt;T,Dynamic,1&gt;  | Eigen::Array&lt;T,1,Dynamic&gt;
+    | blaze::DynamicVector&lt;T,rowVector&gt; |  blaze::DynamicVector&lt;T,colVector&gt;
+    | blaze::DynamicVector&lt;T,blaze::rowVector&gt; |  blaze::DynamicVector&lt;T,blaze::colVector&gt;
+    | blaze::DynamicMatrix&lt;T,blaze::rowMajor&gt;  |  blaze::DynamicMatrix&lt;T,blaze::colMajor&gt;
+    | itpp::Mat&lt;T&gt; | itpp::Vec&lt;T&gt;
+    | blitz::Array&lt;T,1&gt; | blitz::Array&lt;T,2&gt; | blitz::Array&lt;T,3&gt;
+    | dlib::Matrix&lt;T&gt;   | dlib::Vector&lt;T,1&gt; 
+    | ublas::matrix&lt;T&gt;  | ublas::vector&lt;T&gt;
+ptr     := T* 
+accept  := ref | ptr
+```
+</textarea></section>
+
+<section  style="text-align: left;" >
+<h3>The Packet Table:</h3>
+<pre><code>#include &lt;h5cpp/core&gt;
+    #include "generated.h"
+#include &lt;h5cpp/io&gt;
+int main(...){
+    std::vector&lt;sn::example::Record&gt; stream = ... ;
+    h5::pt_t pt = h5::create&lt;sn::example::Record&gt;(fd, "stream of struct",
+                    h5::max_dims{H5S_UNLIMITED,7}, h5::chunk{4,7} | h5::gzip{9} );
+    for( auto record : stream )
+        h5::append(pt, record);
+}
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1-3,6">works with H5CPP compiler assisted reflection</li>
+  <li class="fragment" data-code-focus="6">h5::ds_t automatically converts to  h5::pt_t  </li>
+  <li class="fragment" data-code-focus="7">same property list may be used with HDF5 pipeline</li>
+  <li class="fragment" data-code-focus="8-9">use low latency h5::append in tight loops</li>
+</ul>
+</section>
+
+<section  style="text-align: left;" >
+<h3>Experimental high throughput pipeline</h3>
+<div>is a new H5CPP specific feature, where the code path avoids the traditional HDF5 CAPI processing pipeline, instead 
+a L0-L3 cache aware blocking machanism used based on Level 3 BLAS blocking algorithm, then the data is 
+delegated to the new CAPI v1.10.4  direct chunk read | writes.</div>
+<pre><code>h5::ds_t ds = h5::open(fd,"movie", 
+    h5::high_throughput);
+
+h5::pt_t pt = h5::create<unsigned>(fd,"append scalar",
+    h5::max_dims{H5S_UNLIMITED,nrows,ncols}, h5::chunk{1,nrows,ncols},
+    h5::high_throughput );
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="2">may be activated with h5::high_throughput dxpl</li>
+  <li class="fragment" data-code-focus="1,4">works with all h5::operators </li>
+</ul>
+<div>This feature currently doesn't support any filters, but is bare metal fast.</div>
+</section>
+
+<section  style="text-align: left;" >
+<h3>Attributes:</h3>
+<p>do the right thing. Here are some examples, and come with an easy to use operator:</p>
+<pre><code>h5::ds_t ds = h5::write(fd,"some dataset with attributes", ... );
+ds["att_01"] = 42 ;
+ds["att_02"] = {1.,3.,4.,5.};
+ds["att_03"] = {'1','3','4','5'};
+ds["att_04"] = {"alpha", "beta","gamma","..."};
+ds["att_05"] = "const char[N]";
+ds["att_06"] = u8"const char[N]áééé";
+ds["att_07"] = std::string( "std::string");
+ds["att_08"] = record; // pod/compound datatype
+ds["att_09"] = vector; // vector of pod/compound type
+ds["att_10"] = matrix; // linear algebra object
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1">obtain a handle by h5::create | h5::open | h5::write </li>
+  <li class="fragment" data-code-focus="2,9-11">rank N objects, even compound types when h5cpp compiler used</li>
+  <li class="fragment" data-code-focus="3-5">arrays of various element types</li>
+  <li class="fragment" data-code-focus="6-8">mapped to rank 0 variable length character types</li>
+</ul>
+<p>This work is still under development, please provide feedback...</p>
+</section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Comparing C++ interface to python and C:
+
+(using Gerd Heber's example)
+</textarea></section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## C API: 20 different calls
+```C
+fd = H5Fcreate("weather.hdf5", H5F_ACC_TRUNC,
+               H5P_DEFAULT, H5P_DEFAULT);
+
+// > 20 different API calls:
+//
+// H5Acreate, H5Aclose, H5Awrite,
+// H5Dcreate, H5Dclose, H5Dread, H5Dwrite,
+// H5Pcreate, H5Pclose, H5Pset_create_intermediate_group,
+// H5Pset_layout, H5Pset_chunk, H5Pset_deflate,
+// H5Screate, H5Sclose, H5Screate_simple, H5Sselect_hyperslab
+
+H5Fclose(fd);
+```
+</textarea></section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## [h5py](https://www.h5py.org/) 
+simple clean interface, gain in simplicity at the cost of performance
+
+```python
+1: temperature = np.random.random(1024)
+ 2: wind = np.random.random(2048)
+ 3: f = h5py.File('weather.hdf5')
+ 4: f["/15/temperature"] = temperature
+ 5: f["/15/temperature"].attrs["dt"] = 10.0
+ 6: f["/15/wind"] = wind
+ 7: 
+ 8: dataset[0:10:2]
+ 9: 
+10: big_dataset = f.create_dataset("big",
+11:                                shape=(1024, 1024, 1024, 512),
+12:                                dtype='float32')
+13: big_dataset[344, 678, 23, 36] = 42.0
+14: 
+15: compressed_dataset = f.create_dataset("comp", shape=(1024,),
+16:                                       dtype='int32',
+17:                                       compression='gzip')`
+```
+</textarea></section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+C++ implementation
+clean simple and fast -- thanks to template metaprogramming
+
+```cpp
+ 1: fvec temperature = arma::randu<fvec>(1024);
+ 2: fvec wind = arma::randu<fvec>(2048);
+ 3: auto fd = h5::create("weather.hdf5", H5F_ACC_TRUNC);
+ 4: auto ds = h5::write(fd, "/15/temperature", temperature);
+ 5: ds["dt"] = 10.0f;
+ 6: h5::write(fd, "/15/wind", wind);
+ 7: 
+ 8: h5::read<fvec>(ds, h5::offset{0}, h5::count{5}, h5::stride{2});
+ 9: 
+10: auto big = h5::create<float>(fd,"big"
+11:                              ,h5::current_dims{1024, 1024, 1024, 512}
+12:                              ,h5::chunk{16, 16, 16, 8});
+13: float value {42.0};
+14: h5::write<float>(ds, &value
+15:                  ,h5::offset{344, 678, 23, 36}
+16:                  ,h5::count{1, 1, 1, 1});
+17: 
+18: auto comp = h5::create<int>(fd, "comp"
+19:                             ,h5::current_dims{1024}
+20:                             ,h5::chunk{64} | h5::gzip{4});
+```
+</textarea></section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Performance 
+</textarea></section>
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## A FAST I/O PIPELINE(experimental):
+
+```cpp
+1: h5::ds_t ds = h5::open(fd,"some_dataset", h5::high_throughput);
+```
+- L0-L3 cache aware blocking
+- possibility for parallel filter chain
+- possibility for direct MPI-IO/ROMIO
+- Measurements below from a Lenovo notebook:
+
+```
+Intel(R) Core(TM) i7-3520M CPU @ 2.90GHz
+8 GB RAM
+INTEL SSDSC2BW180A3L (LF1i) disk (~500 MB/s)
+```
+</textarea></section>
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Transfer size 2GB blocks:
+|MB/sec       |   write |     read |
+|-------------|---------|----------|
+|h5cpp block  | 265.69  |   518.41 |
+|h5cpp packet | 290.57  |   499.88 |
+| posix IO    | 288.56  |   513.51 |
+</textarea></section>
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Transfer size 30MB blocks:
+|MB/sec       |   write |     read |
+|-------------|---------|----------|
+|h5cpp block  | 2457.41 |   3251.99 |
+|h5cpp packet | 1636.30  |   3151.15 |
+| posix IO    | 1443.59  |   5325.60 |
+</textarea></section>
+
+<section  style="text-align: left;" >
+	<h3>MPI-IO made easy</h3>
+<pre><p1>H5CPP with parallel HDF5</p1>
+<code>#include &lt;mpi.h&gt;
+#include &lt;h5cpp/all&gt;
+...
+int main(int argc, char** argv) {
+    ...
+    MPI_Init(NULL, NULL);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    ...
+    { .. /* for H5CPP see next slide */.. }
+    ...
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Finalize();
+}
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1-4,14">start your program as usual</li>
+  <li class="fragment" data-code-focus="6-8,12-13">write the MPI boilerplate</li>
+</ul>
+</section>
+
+<section  style="text-align: left;" >
+	<h3>MPI-IO made easy</h3>
+<pre><p1>H5CPP with parallel HDF5</p1>
+<code>{
+std::vector<double> v(nrows);
+auto fd = h5::create("hdf5_container_name.h5", H5F_ACC_TRUNC,
+               h5::fcpl,
+	           h5::mpiio({mpi_comm, mpi_info}) );
+h5::write( fd, "dataset", v,
+	h5::chunk{nrows,1}, h5::current_dims{nrows,size},h5::count{nrows,1}
+	h5::offset{0,rank}, h5::block{1,1}, h5::stride{1,1},
+	h5::collective );
+}
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="1,10">use code-block to activate H5CPP RAII</li>
+  <li class="fragment" data-code-focus="2">arbitrary objects works, as long as you can get a pointer to memory</li>
+  <li class="fragment" data-code-focus="5">pass `h5::mpiio` file access property list </li>
+  <li class="fragment" data-code-focus="8">control IO with `rank`</li>
+  <li class="fragment" data-code-focus="9">set `h5::independent` | `h5::collective` </li>
+</ul>
+</section>
+<section  style="text-align: left;" >
+	<h3>MPI-IO diagnostics</h3>
+<pre><p1>H5CPP with parallel HDF5</p1>
+<code>...
+h5::dxpl_t dxpl = h5::collective;
+
+h5::write( fd, "dataset", v,
+	h5::chunk{nrows,1}, h5::current_dims{nrows,size},h5::count{nrows,1}
+	h5::offset{0,rank}, h5::block{1,1}, h5::stride{1,1},
+	dxpl );
+
+std::cout << dxpl <<"\n";
+...
+</code></pre>
+<ul>
+  <li class="fragment" data-code-focus="2">make a copy of h5::collective | h5::independent properties</li>
+  <li class="fragment" data-code-focus="2,7">pass the mutable dxpl to IO operators</li>
+  <li class="fragment" data-code-focus="9">print out result to std::cout</li>
+</ul>
+</section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## MPI-IO made easy:
+- full support for:
+    - file access property lists
+	- data transfer property lists
+- H5CPP compiler assisted reflection
+- tunable, high performance MPIIO
+</textarea></section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## H5CPP [Kita support](https://bitbucket.hdfgroup.org/users/jhenderson/repos/rest-vol/browse)
+
+```cpp 
+...
+#define H5CPP_HAVE_KITA
+#include <h5cpp/all>
+
+int main(void){
+    RVinit();
+	...
+    file_id = H5Fopen("my/file.h5");
+	auto fd = h5::create("my/file.h5", H5F_ACC_TRUNC,
+					h5::kita ); //  must be set
+		.. do your IO thing ...
+
+    RVterm();
+}
+```
+</textarea></section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## H5CPP [Kita support](https://bitbucket.hdfgroup.org/users/jhenderson/repos/rest-vol/browse)
+
+```cpp 
+... MPI INIT ...
+h5::fapl_t fapl = h5::kita{};
+if( rank == 0 )
+	auto fd = h5::create("/home/steven/kita-io-test.h5", H5F_ACC_TRUNC,
+		h5::fcpl, fapl );
+MPI_Barrier(MPI_COMM_WORLD);
+auto fd = h5::open("/home/steven/kita-io-test.h5",H5F_ACC_RDWR, fapl);
+h5::ds_t ds = h5::create<double>(fd,data_path,
+		h5::max_dims{size,nrows}, h5::chunk{1,nchunk} | h5::alloc_time_early );
+
+h5::write( ds, v, h5::current_dims{nrows,size},
+		h5::offset{rank,0}, h5::count{1,nrows} );
+... MPI SHUTDOWN ...
+```
+</textarea></section>
+
+
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Install
+- Clone and install [HDF5 from latest source](https://bitbucket.hdfgroup.org/scm/hdffv/hdf5.git)
+- get curl from [this site and install](https://curl.haxx.se/)
+- yayl [JSON parser](https://lloyd.github.io/yajl/)
+- get KITAA&trade; [by HDFGroup](https://www.hdfgroup.org/solutions/hdf-kita/)
+- Clone [Rest VOL plugin](https://bitbucket.hdfgroup.org/scm/~jhenderson/rest-vol.git)
+
+```bash
+ ./configure --with-hdf5=/usr/local
+```
+</textarea></section>
+<section data-markdown data-transition="zoom"  style="text-align: left;"><textarea data-template>
+## Can we have MPI the "easy way",   a la H5CPP?
+- seamless compiler assisted reflection for MPI and MPI-IO
+- matching easy to use templates
+- automatic MPI derived types
+
+### example:
+```
+MPI_Allgather(const void *sendbuf, int  sendcount,
+     MPI_Datatype sendtype, void *recvbuf, int recvcount,
+     MPI_Datatype recvtype, MPI_Comm comm)
+
+	 
+mpi::all_gather<T>(comm,  object)
+```
+
+
+- make **mpi4py** look bad...
+</textarea></section>
+
+
+
